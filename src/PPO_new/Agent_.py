@@ -1,5 +1,5 @@
 import keras.losses
-import tensorflow as tf
+import tensorflow as t
 
 from tensorflow.keras import Model
 from tensorflow.keras.layers import Conv2D, Dense, Flatten, Concatenate, Input, AvgPool2D
