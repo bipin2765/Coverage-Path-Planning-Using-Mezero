@@ -7,7 +7,7 @@ from src.CPP.Physics import CPPPhysics, CPPPhysicsParams
 from src.CPP.State import CPPState
 from src.CPP.Rewards import CPPRewardParams, CPPRewards
 
-from src.PPO_new.Trainer_ import PPOTrainerParams, PPOTrainer
+from src.PPO_new.Trainer_ import TrainerParams, PPOTrainer
 from src.base.Environment import BaseEnvironment, BaseEnvironmentParams
 from src.base.GridActions import GridActions
 
@@ -17,7 +17,7 @@ class CPPEnvironmentParams(BaseEnvironmentParams):
         super().__init__()
         self.grid_params = CPPGridParams()
         self.reward_params = CPPRewardParams()
-        self.trainer_params = PPOTrainerParams
+        self.trainer_params = TrainerParams
         self.agent_params = PPOAgentParams
         self.physics_params = CPPPhysicsParams()
 

@@ -23,7 +23,6 @@ class CPPEnvironmentParams(BaseEnvironmentParams):
 
 
 class CPPEnvironment(BaseEnvironment):
-
     def __init__(self, params: CPPEnvironmentParams):
         self.display = CPPDisplay()
         super().__init__(params, self.display)

@@ -34,7 +34,7 @@
         "rm_pre_fill_ratio": 0.5,
         "rm_pre_fill_random": true,
         "eval_period": 5,
-        "rm_size": 50000,
+        "rm_size": 400,
         "load_model": ""
     },
     "agent_params": {

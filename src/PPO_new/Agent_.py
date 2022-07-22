@@ -1,12 +1,12 @@
-import keras.losses
 import tensorflow as tf
-
 from tensorflow.keras import Model
-from tensorflow.keras.layers import Conv2D, Dense, Flatten, Concatenate, Input, AvgPool2D
-import tensorflow_probability as tfp
-from src.PPO_new.Memory_ import PPOMemory
-
+from tensorflow.keras.layers import Conv2D, Dense, Flatten, Concatenate, Input, AvgPool2D, Conv3D
 import numpy as np
+from src.CPP.State import CPPState
+from tensorflow.keras import backend as K
+from tensorflow.keras.optimizers import Adam
+import copy
+from src.PPO_new.Memory_ import ReplayMemory
 
 # Code commit and push
 def print_node(x):
@@ -33,249 +33,240 @@ class PPOAgentParams:
         self.global_map_scaling = 3
         self.local_map_size = 17
 
-
 class PPOAgent(object):
-
-    def __init__(self, params: PPOAgentParams, example_state, example_action, stats=None, gamma=0.99,
-                        alpha=0.0003, gae_lambda=0.95, policy_clip=0.2, batch_size=128, n_epochs=15):
-
+    def __init__(self, params, example_state: CPPState, example_action, stats=None):
         self.params = params
-        self.gamma = gamma
-        self.alpha = alpha
-        self.gae_lambda = gae_lambda
-        self.policy_clip = policy_clip
-        self.batch_size = batch_size
-        self.n_epochs = n_epochs
-        self.memory = PPOMemory(batch_size=128)
+        gamma = tf.constant(0.99, dtype=float)
 
         self.boolean_map_shape = example_state.get_boolean_map_shape()
-        print(self.boolean_map_shape)
-        self.float_map_shape = example_state.get_float_map_shape()
         self.scalars = example_state.get_num_scalars()
         self.num_actions = len(type(example_action))
-        self.num_map_channels = self.boolean_map_shape[2] + self.float_map_shape[2]
+        self.num_map_channels = self.boolean_map_shape[2]
+        self.scalars = example_state.get_num_scalars()
+        self.action_size = len(type(example_action))
 
         # Create shared inputs
-        boolean_map_input = Input(shape=self.boolean_map_shape, name='boolean_map_input', dtype=tf.bool)
-        float_map_input = Input(shape=self.float_map_shape, name='float_map_input', dtype=tf.float32)
+        boolean_map_input = Input(shape=self.boolean_map_shape, name='boolean_map_input', dtype=tf.float32)
         scalars_input = Input(shape=(self.scalars,), name='scalars_input', dtype=tf.float32)
         states = [boolean_map_input,
-                  float_map_input,
                   scalars_input]
 
-        map_cast = tf.cast(boolean_map_input, dtype=tf.float32)
-        padded_map = tf.concat([map_cast, float_map_input], axis=3)
+        # Initialization
+        self.state_size = states
+        self.max_average = 0  # when average score is above 0 model will be saved
+        self.lr = 0.00025
+        self.shuffle = False
+        self.optimizer = Adam
 
-        self.q_network = self.build_model_actor(padded_map, scalars_input, states)
-        self.target_network = self.build_model_critic(padded_map, scalars_input, states, 'target_')
-
-        if self.params.use_global_local:
-            self.global_map_model = Model(inputs=[boolean_map_input, float_map_input],
-                                          outputs=self.global_map)
-            self.local_map_model = Model(inputs=[boolean_map_input, float_map_input],
-                                         outputs=self.local_map)
-            self.total_map_model = Model(inputs=[boolean_map_input, float_map_input],
-                                         outputs=self.total_map)
-
-        q_values = self.q_network.output
-        q_target_values = self.target_network.output
-
-        # Exploit act model
-        self.get_value_output = Model(inputs=states, outputs=q_target_values)
-
-        self.probs_action = Model(inputs=states, outputs=q_values)
+        # Create Actor-Critic network models
+        self.Actor = Actor(input_states=self.state_size,
+                           num_actions=self.action_size,
+                           params=self.params,
+                           optimizer=self.optimizer)
+        self.Critic = Critic(input_states=self.state_size,
+                             num_actions=self.action_size,
+                             params=self.params,
+                             optimizer=self.optimizer)
 
         if stats:
-            stats.set_model(self.target_network)
+            stats.set_model(self.Actor.model)
 
-    def build_model_actor(self, map_proc, states_proc, inputs, name=''):
-
-        flatten_map = self.create_map_proc(map_proc, name)
-
-        layer = Concatenate(name=name + 'concat')([flatten_map, states_proc])
-        for k in range(self.params.hidden_layer_num):
-            layer = Dense(self.params.hidden_layer_size, activation='relu', name=name + 'hidden_layer_all_' + str(k))(
-                layer)
-        output = Dense(self.num_actions, activation='linear', name=name + 'output_layer')(layer)
-
-        model = Model(inputs=inputs, outputs=output)
-
-        return model
-
-    def build_model_critic(self, map_proc_, states_proc_, inputs, name=''):
-
-        flatten_map_ = self.create_map_proc(map_proc_, name)
-
-        layer = Concatenate(name=name + 'concat')([flatten_map_, states_proc_])
-        for k in range(self.params.hidden_layer_num):
-            layer = Dense(self.params.hidden_layer_size, activation='relu', name=name + 'hidden_layer_all_' + str(k))(
-                layer)
-        output = Dense(1, activation=None, name=name + 'output_layer')(layer)
-
-        model = Model(inputs=inputs, outputs=output)
-
-        return model
-
-    def create_map_proc(self, conv_in, name):
-
-        if self.params.use_global_local:
-            # Forking for global and local map
-            # Global Map
-            global_map = tf.stop_gradient(
-                AvgPool2D((self.params.global_map_scaling, self.params.global_map_scaling))(conv_in))
-
-            self.global_map = global_map
-            self.total_map = conv_in
-
-            for k in range(self.params.conv_layers):
-                global_map = Conv2D(self.params.conv_kernels, self.params.conv_kernel_size, activation='relu',
-                                    strides=(1, 1),
-                                    name=name + 'global_conv_' + str(k + 1))(global_map)
-
-            flatten_global = Flatten(name=name + 'global_flatten')(global_map)
-
-            # Local Map
-            crop_frac = float(self.params.local_map_size) / float(self.boolean_map_shape[0])
-            local_map = tf.stop_gradient(tf.image.central_crop(conv_in, crop_frac))
-            self.local_map = local_map
-
-            for k in range(self.params.conv_layers):
-                local_map = Conv2D(self.params.conv_kernels, self.params.conv_kernel_size, activation='relu',
-                                   strides=(1, 1),
-                                   name=name + 'local_conv_' + str(k + 1))(local_map)
-
-            flatten_local = Flatten(name=name + 'local_flatten')(local_map)
-
-            return Concatenate(name=name + 'concat_flatten')([flatten_global, flatten_local])
-        else:
-            conv_map = Conv2D(self.params.conv_kernels, self.params.conv_kernel_size, activation='relu', strides=(1, 1),
-                              name=name + 'map_conv_0')(conv_in)
-            for k in range(self.params.conv_layers - 1):
-                conv_map = Conv2D(self.params.conv_kernels, self.params.conv_kernel_size, activation='relu',
-                                  strides=(1, 1),
-                                  name=name + 'map_conv_' + str(k + 1))(conv_map)
-
-            flatten_map = Flatten(name=name + 'flatten')(conv_map)
-            return flatten_map
 
     def act(self, state):
-        return self.choose_action(state)
-
-    def learn(self):
-        for _ in range(self.n_epochs):
-            state_bool_arr, state_float_arr, state_scaler, action_arr,\
-                old_prob_arr, vals_arr, reward_arr, dones_arr, batches = \
-            self.memory.generate_batches()
-
-            values = vals_arr
-            advantage = np.zeros(len(reward_arr), dtype=np.float32)
-
-            for t in range(len(reward_arr)-1):
-                discount = 1
-                a_t = 0
-                for k in range(t, len(reward_arr)-1):
-                    try:
-                        a_t += discount * (reward_arr[k] + self.gamma*values[k+1] * (
-                            1-int(dones_arr[k])) - values[k])
-                    except:
-                        print("agent.py: dones and value object")
-                        print(dones_arr[k], values[k])
-                        raise
-                    discount *= self.gamma*self.gae_lambda
-                advantage[t] = a_t
-
-            for batch in batches:
-                with tf.GradientTape(persistent=True) as tape:
-                    boolean_map_in = state_bool_arr[batch] #[tf.newaxis, ...]
-                    float_map_in = state_float_arr[batch] #[tf.newaxis, ...]
-                    scalars = np.array(state_scaler[batch], dtype=np.single) #[tf.newaxis, ...]
-
-                    old_probs = tf.convert_to_tensor(old_prob_arr[batch])
-                    actions = tf.convert_to_tensor(action_arr[batch])
-
-                    probs = self.probs_action([boolean_map_in, float_map_in, scalars]).numpy()[0]
-                    if probs.all():
-                        print("negative value", probs)
-                    dist = tfp.distributions.Categorical(probs)
-                    print("value of dist categorical: ", dist)
-                    new_probs = dist.log_prob(actions)
-                    print("Value from new_probs", new_probs)
-
-                    critic_value = self.get_value_output([boolean_map_in, float_map_in, scalars]).numpy()[0]
-                    critic_value = tf.squeeze(critic_value, 1)
-
-                    prob_ratio = tf.math.exp(new_probs - old_probs)
-                    weighted_probs = advantage[batch] * prob_ratio
-                    clipped_probs = tf.clip_by_value(prob_ratio,
-                                                     1 - self.policy_clip,
-                                                     1 + self.policy_clip)
-                    weighted_clipped_probs = clipped_probs * advantage[batch]
-                    actor_loss = -tf.math.minimum(weighted_probs, weighted_clipped_probs)
-                    actor_loss = tf.math.reduce_mean(actor_loss)
-
-                    returns = advantage[batch] + values[batch]
-
-                    critic_loss = keras.losses.MSE(critic_value, returns)
-
-                actor_params = self.q_network.trainable_variables
-                actor_grads = tape.gradient(actor_loss, actor_params)
-                critic_params = self.target_network.trainable_variables
-                critic_grads = tape.gradient(critic_loss, critic_params)
-                self.q_network.optimizer.apply_gradients(
-                    zip(actor_grads, actor_params))
-                self.target_network.optimizer.apply_gradients(
-                    zip(critic_grads, critic_params))
-        self.memory.clear_memory()
+        """ example:
+        pred = np.array([0.05, 0.85, 0.1])
+        action_size = 3
+        np.random.choice(a, p=pred)
+        result>>> 1, because it have the highest probability to be taken
+        """
+        # Use the network to predict the next action to take, using the model
+        if type(state) == CPPState:
+            state = self.Actor.transfrom_state(state, for_prediction=True)
+        prediction = self.Actor.predict(state)[0]
+        action = np.random.choice(self.action_size, p=prediction)
+        action_onehot = np.zeros([self.action_size])
+        action_onehot[action] = 1
+        return action, action_onehot, prediction
 
     def store_transition(self, state, action, probs, vals, reward, done):
         self.memory.store_memory(state, action, probs, vals, reward, done)
 
-    def get_exploitation_action(self, state):
+    def get_gaes(self, rewards, dones, values, next_values, gamma=0.99, lamda=0.9, normalize=True):
+        deltas = [r + gamma * (1 - d) * nv - v for r, d, nv, v in zip(rewards, dones, next_values, values)]
+        deltas = np.stack(deltas)
+        gaes = copy.deepcopy(deltas)
+        for t in reversed(range(len(deltas) - 1)):
+            gaes[t] = gaes[t] + (1 - dones[t]) * gamma * lamda * gaes[t + 1]
 
-        boolean_map_in = state.get_boolean_map()[tf.newaxis, ...]
-        float_map_in = state.get_float_map()[tf.newaxis, ...]
-        scalars = np.array(state.get_scalars(), dtype=np.single)[tf.newaxis, ...]
+        target = gaes + values
+        if normalize:
+            gaes = (gaes - gaes.mean()) / (gaes.std() + 1e-8)
+        return np.vstack(gaes), np.vstack(target)
 
-        return self.exploit_model([boolean_map_in, float_map_in, scalars]).numpy()[0]
+    def replay(self, states, actions, rewards, predictions, dones, next_states):
+        # Get Critic network predictions
+        values = self.Critic.predict(states)
+        next_values = self.Critic.predict(next_states)
+        advantages, target = self.get_gaes(rewards, dones, np.squeeze(values), np.squeeze(next_values))
+        y_true = np.hstack([advantages, predictions, actions])
 
-    def choose_action(self, state):
+        # training Actor and Critic networks
+        self.Actor.model.fit(states, y_true, epochs=10, verbose=0, shuffle=self.shuffle)
+        self.Critic.model.fit([states, values, target],
+                               y=None,
+                               epochs=10,
+                               verbose=0,
+                               shuffle=self.shuffle)
 
-        boolean_map_in = state.get_boolean_map()[tf.newaxis, ...]
-        # print("Booleam map shape", boolean_map_in.shape, state.get_boolean_map().shape)
-        float_map_in = state.get_float_map()[tf.newaxis, ...]
-        # print("Agent > Float map shape", float_map_in.shape, state.get_float_map().shape)
-        # exit(0)
-        scalars = np.array(state.get_scalars(), dtype=np.single)[tf.newaxis, ...]
-        probs = self.probs_action([boolean_map_in, float_map_in, scalars])
-        dist = tfp.distributions.Categorical(probs)
-        action = dist.sample()
-        log_prob = dist.log_prob(action)
-        value = self.get_value_output([boolean_map_in, float_map_in, scalars]).numpy()
+    # def save_weights(self):
+    #     self.Actor.model.save_weights(self.params.save_dir + "actor")
+    #     self.Critic.model.save_weights(self.params.save_dir + "critic")
 
-        action = action.numpy()[0]
-        value = value[0]
-        log_prob = log_prob.numpy()[0]
+    # def load_weights(self, path_to_weights):
+    #     self.Actor.model.load_weights(path_to_weights + "actor")
+    #     self.Critic.model.load_weights(path_to_weights + "critic")
 
-        return action, log_prob, value
+    def train(self, replay_memory):
+        states = [np.asarray([state_oi.get_boolean_map() for state_oi in replay_memory[0]]).astype('float32'),
+                  np.asarray([state_oi.movement_budget for state_oi in replay_memory[0]]).astype('float32')]
+        actions = replay_memory[1]
+        rewards = replay_memory[2]
+        next_states = [np.asarray([state_oi.get_boolean_map() for state_oi in replay_memory[3]]).astype('float32'),
+                  np.asarray([state_oi.movement_budget for state_oi in replay_memory[3]]).astype('float32')]
+        dones = [state_oi.is_terminal() for state_oi in replay_memory[3]]
+        predictions = replay_memory[4]
+        self.replay(states, actions, rewards, predictions, dones, next_states)
 
 
-    def save_weights(self, path_to_weights):
-        self.target_network.save_weights(path_to_weights)
+class PartModel:
+    def __init__(self, params):
+        self.params = params
 
-    def save_model(self, path_to_model):
-        self.target_network.save(path_to_model)
+    def create_map_proc(self, conv_in, name):
+        global_map = tf.stop_gradient(
+            AvgPool2D((self.params.global_map_scaling, self.params.global_map_scaling))(conv_in))
 
-    def get_global_map(self, state):
-        boolean_map_in = state.get_boolean_map()[tf.newaxis, ...]
-        float_map_in = state.get_float_map()[tf.newaxis, ...]
-        return self.global_map_model([boolean_map_in, float_map_in]).numpy()
+        self.global_map = global_map
+        self.total_map = conv_in
 
-    def get_local_map(self, state):
-        boolean_map_in = state.get_boolean_map()[tf.newaxis, ...]
-        float_map_in = state.get_float_map()[tf.newaxis, ...]
-        return self.local_map_model([boolean_map_in, float_map_in]).numpy()
+        for k in range(self.params.conv_layers):
+            global_map = Conv2D(self.params.conv_kernels, self.params.conv_kernel_size, activation='relu',
+                                strides=(1, 1),
+                                name=name + 'global_conv_' + str(k + 1))(global_map)
 
-    def get_total_map(self, state):
-        boolean_map_in = state.get_boolean_map()[tf.newaxis, ...]
-        float_map_in = state.get_float_map()[tf.newaxis, ...]
-        return self.total_map_model([boolean_map_in, float_map_in]).numpy()
+        flatten_global = Flatten(name=name + 'global_flatten')(global_map)
+
+        crop_frac = float(self.params.local_map_size) / float(conv_in.shape[1])
+        local_map = tf.stop_gradient(tf.image.central_crop(conv_in, crop_frac))
+        self.local_map = local_map
+
+        for k in range(self.params.conv_layers):
+            local_map = Conv2D(self.params.conv_kernels, self.params.conv_kernel_size, activation='relu',
+                               strides=(1, 1),
+                               name=name + 'local_conv_' + str(k + 1))(local_map)
+
+        flatten_local = Flatten(name=name + 'local_flatten')(local_map)
+
+        return Concatenate(name=name + 'concat_flatten')([flatten_global, flatten_local])
+
+    def build_model(self, bool_map, scalars, inputs, num_actions, name):
+        flatten_map = self.create_map_proc(bool_map, name)
+        layer = Concatenate(name=name + 'concat')([flatten_map, scalars])
+        for k in range(self.params.hidden_layer_num):
+            layer = Dense(int(self.params.hidden_layer_size/(k+1)), activation='relu',
+                          name=name + 'hidden_layer_all_' + str(k),
+                          kernel_initializer=tf.random_normal_initializer(stddev=0.01))(layer)
+        if name == "actor":
+            output = Dense(num_actions, activation="softmax")(layer)
+            model = Model(inputs=inputs, outputs=output)
+        else:
+            old_values = Input(shape=(1,))
+            y_true = Input(shape=(1,))
+            output = Dense(1, activation=None)(layer)
+            model = Model(inputs=[inputs, old_values, y_true], outputs=output)
+            return output, y_true, old_values, model
+
+        return model
+
+    def transfrom_state(self, state: CPPState, for_prediction=False):
+        bool_map = state.get_boolean_map()
+        scalars = np.array(state.get_scalars(), dtype=np.single)
+        state = [bool_map, scalars]
+        if for_prediction:
+            state = [state_oi[tf.newaxis, ...] for state_oi in state]
+        return state
+
+
+class Actor(PartModel):
+    def __init__(self, input_states, num_actions, params, optimizer):
+        super().__init__(params)
+        self.action_space = num_actions
+        self.model = self.build_model(bool_map=input_states[0],
+                                      scalars=input_states[1],
+                                      inputs=input_states,
+                                      num_actions=num_actions,
+                                      name="actor")
+        self.model.compile(loss=self.ppo_loss, optimizer=optimizer(learning_rate=self.params.learning_rate))
+
+    def ppo_loss(self, y_true, y_pred):
+        # Defined in https://arxiv.org/abs/1707.06347
+        advantages, prediction_picks, actions = y_true[:, :1], y_true[:, 1:1 + self.action_space], y_true[:,
+                                                                                                   1 + self.action_space:]
+        LOSS_CLIPPING = 0.2
+        ENTROPY_LOSS = 0.001
+
+        prob = actions * y_pred
+        old_prob = actions * prediction_picks
+
+        prob = K.clip(prob, 1e-10, 1.0)
+        old_prob = K.clip(old_prob, 1e-10, 1.0)
+
+        ratio = K.exp(K.log(prob) - K.log(old_prob))
+
+        p1 = ratio * advantages
+        p2 = K.clip(ratio, min_value=1 - LOSS_CLIPPING, max_value=1 + LOSS_CLIPPING) * advantages
+
+        actor_loss = -K.mean(K.minimum(p1, p2))
+
+        entropy = -(y_pred * K.log(y_pred + 1e-10))
+        entropy = ENTROPY_LOSS * K.mean(entropy)
+
+        total_loss = actor_loss - entropy
+
+        return total_loss
+
+    def predict(self, state):
+        return self.model.predict(state)
+
+
+class Critic(PartModel):
+    def __init__(self, input_states, num_actions, params, optimizer):
+        super().__init__(params)
+        self.action_space = num_actions
+        out, y_true, old_value, self.model = self.build_model(bool_map=input_states[0],
+                                                              scalars=input_states[1],
+                                                              inputs=input_states,
+                                                              num_actions=num_actions,
+                                                              name="critic")
+        self.model.add_loss(self.__class__.critic_PPO2_loss(
+            values=old_value,
+            y_true=y_true,
+            y_pred=out
+        ))
+        self.model.compile(loss=None,
+                           optimizer=optimizer(lr=self.params.learning_rate))
+
+    @staticmethod
+    def critic_PPO2_loss(y_true, y_pred, values):
+        LOSS_CLIPPING = 0.2
+        clipped_value_loss = values + K.clip(y_pred - values, -LOSS_CLIPPING, LOSS_CLIPPING)
+        v_loss1 = (y_true - clipped_value_loss) ** 2
+        v_loss2 = (y_true - y_pred) ** 2
+
+        value_loss = 0.5 * K.mean(K.maximum(v_loss1, v_loss2))
+        # value_loss = K.mean((y_true - y_pred) ** 2) # standard PPO loss
+        return value_loss
+
+    def predict(self, state):
+        final_model = Model([self.model.input[0], self.model.input[1]], self.model.output)
+        return final_model.predict([state, np.zeros((state[0].shape[0], 1))])

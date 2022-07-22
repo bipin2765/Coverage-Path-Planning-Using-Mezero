@@ -31,6 +31,7 @@ class BaseEnvironment:
         self.stats.on_episode_begin(self.episode_count)
         while not state.is_terminal():
             state = self.step(state)
+            self.trainer.train_agent()
 
         self.stats.on_episode_end(self.episode_count)
         self.stats.log_training_data(step=self.step_count)
@@ -53,16 +54,13 @@ class BaseEnvironment:
         self.stats.training_ended()
 
     def step(self, state):
-        action, prob, val = self.agent.act(state)
+        old_state = copy.deepcopy(state)
+        action, action_onehot, prediction = self.agent.act(state)
         next_state = self.physics.step(GridActions(action))
-        reward = self.rewards.calculate_reward(state, GridActions(action), next_state)
-        done = state.is_terminal()
+        reward = self.rewards.calculate_reward(old_state, GridActions(action), next_state)
+        self.trainer.add_experience(state, action_onehot, reward, next_state, prediction)
+        self.stats.add_experience((old_state, action, reward, copy.deepcopy(next_state)))
         self.step_count += 1
-
-        self.agent.store_transition(state, action, prob, val, reward, done)
-
-        if self.step_count % 128 == 0:
-            self.agent.learn()
         return copy.deepcopy(next_state)
 
     def init_episode(self, init_state=None):
