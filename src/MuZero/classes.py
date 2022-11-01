@@ -45,7 +45,6 @@ class Node:
         self.hidden_state = hidden_state
         self.transition_reward = 0  # no transition reward for the root node
 
-        # get predicted policy and value
         policy, value = network_model.prediction_function(self.hidden_state)
         self.policy = policy
         self.value = value.numpy()[0][0]  # convert to scalar
