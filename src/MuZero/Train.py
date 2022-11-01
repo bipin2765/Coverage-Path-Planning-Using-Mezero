@@ -16,39 +16,36 @@ def train(network_model, replay_buffer, config):
         optimizer = Adam(learning_rate=config['train']['learning_rate'], beta_1=config['train']['beta_1'],
                          beta_2=config['train']['beta_2'])
 
-        for game in replay_buffer.sample():
+        for mem in replay_buffer.sample():
 
-            game_length = len(game.reward_history)
+            memory_length = len(mem.reward_history)
             sampled_index = np.random.choice(
-                range(game_length))
+                range(memory_length))
 
-            hidden_state = network_model.representation_function(game.state_history[sampled_index])
+            hidden_state = network_model.representation_function(mem.state_history[sampled_index])
 
-            if (sampled_index + config['train']['num_unroll_steps']) < game_length:
+            if (sampled_index + config['train']['num_unroll_steps']) < memory_length:
                 num_unroll_steps = int(config['train']['num_unroll_steps'])
             else:
-                num_unroll_steps = game_length - 1 - sampled_index
+                num_unroll_steps = memory_length - 1 - sampled_index
 
             for start_index in range(sampled_index, sampled_index + num_unroll_steps):
 
                 hidden_state, pred_reward = network_model.dynamics_function(
-                    [hidden_state, game.action_history[start_index]])
+                    [hidden_state, mem.action_history[start_index]])
                 pred_policy, pred_value = network_model.prediction_function(hidden_state)
 
-                if (game_length - start_index - 1) >= config['train'][
-                    'num_bootstrap_timesteps']:
-                    true_value = sum(
-                        [game.reward_history[i] * (config['self_play']['discount_factor'] ** (i - start_index)) for i in
-                         range(start_index, int(start_index + config['train']['num_bootstrap_timesteps']))]) + \
-                                 game.value_history[start_index + int(config['train']['num_bootstrap_timesteps'])] * \
+                if (memory_length - start_index - 1) >= config['train']['num_bootstrap_timesteps']:
+                    true_value = sum([mem.reward_history[i] * (config['self_play']['discount_factor'] ** (i - start_index)) \
+                                      for i in range(start_index, int(start_index + config['train']['num_bootstrap_timesteps']))]) + \
+                                 mem.value_history[start_index + int(config['train']['num_bootstrap_timesteps'])] * \
                                  (config['self_play']['discount_factor'] ** (config['train']['num_bootstrap_timesteps']))
 
                 else:
-                    true_value = sum(
-                        [game.reward_history[i] * (config['self_play']['discount_factor'] ** (i - start_index)) for i in range(start_index, game_length)])
+                    true_value = sum([mem.reward_history[i] * (config['self_play']['discount_factor'] ** (i - start_index)) for i in range(start_index, memory_length)])
 
-                true_reward = game.reward_history[start_index]
-                true_policy = game.policy_history[start_index + 1]
+                true_reward = mem.reward_history[start_index]
+                true_policy = mem.policy_history[start_index + 1]
 
                 ### calculate loss ###
                 loss += (1 / num_unroll_steps) * (

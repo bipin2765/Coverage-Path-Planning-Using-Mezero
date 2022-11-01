@@ -5,6 +5,7 @@ import distutils.util
 from src.ModelStats import ModelStatsParams, ModelStats
 from src.base.BaseDisplay import BaseDisplay
 from src.base.GridActions import GridActions
+from src.CPP.State import CPPState
 from src.MuZero.Agent_ import MuZeroAgent
 from src.MuZero.classes import *
 from src.MuZero.replay_memory import ReplayBuffer
@@ -33,7 +34,7 @@ confignew = {  'action_size' : 5,
                'seed': 0
                }
 
-class GameMemory:
+class BufferMemory:
     def __int__(self, init_state = None):
         if init_state:
             self.state_history = [init_state]  # starts at t = 0
@@ -58,14 +59,14 @@ class BaseEnvironment:
     def train_episode(self):
         # Create game memory object to store play history
         _init_state = self.agent.state_size.reshape(1, -1) #states including boolean and scaler in single row.
-        game_memory: GameMemory = GameMemory(_init_state)
+        memory_: BufferMemory = BufferMemory(_init_state)
 
         #self.env.seed(int(np.random.choice(range(int(1e5)))))
         state = copy.deepcopy(self.init_episode())
         self.stats.on_episode_begin(self.episode_count)
         while not state.is_terminal():
-            state = self.step(state, game_memory)
-        self.replay_buffer.add(game_memory)
+            state = self.step(state, memory_)
+        self.replay_buffer.add(memory_)
         train(self.agent.Network_model, self.replay_buffer, confignew)
 
         self.stats.on_episode_end(self.episode_count)
@@ -92,7 +93,10 @@ class BaseEnvironment:
 
         self.stats.training_ended()
 
-    def step(self, state, game_memory: GameMemory):
+    def step(self, state, memory_: BufferMemory):
+        if type(state) == CPPState:
+            state = self.agent.Network_model.transfrom_state(state)
+
         old_state = copy.deepcopy(state)
         action_index = mcts(old_state, self.agent.Network_model, get_temperature(self.episode_count),confignew)
 
@@ -100,13 +104,12 @@ class BaseEnvironment:
         reward = self.rewards.calculate_reward(old_state, GridActions(action_index), current_state)
         action = np.array([1 if i==action_index else 0 for i in range(self.action_size)]).reshape(1,-1)
 
-        game_memory.state_history.append(current_state.reshape(1,-1))
-        game_memory.action_history.append(action)
-        game_memory.reward_history.append(reward)
+        memory_.state_history.append(current_state.reshape(1, -1))
+        memory_.action_history.append(action)
+        memory_.reward_history.append(reward)
         #self.trainer.add_experience(current_state, action, reward)
         #self.stats.add_experience((current_state, action, reward)
         self.step_count += 1
-
 
         return copy.deepcopy(current_state)
 
@@ -165,7 +168,7 @@ def mcts(reset_state, network_model, temperature, confignew):
 
     root_node = Node(0)
     root_node.expand_root_node(reset_state, network_model)
-    game_memory: GameMemory = GameMemory()
+    game_memory: BufferMemory = BufferMemory()
 
     min_q_value, max_q_value = root_node.value, root_node.value  # keep track of min and max mean-Q values to normalize them during selection phase
     # this is for environments that have unbounded Q-values, otherwise the prior could potentially have very little influence over selection, if Q-values are large
