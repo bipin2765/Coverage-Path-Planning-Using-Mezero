@@ -1,3 +1,4 @@
+import tensorflow as tf
 from tensorflow.keras.models import Model,save_model,load_model
 from tensorflow.keras.layers import Input,Dense,Concatenate
 
@@ -41,11 +42,13 @@ class Node:
 
     def expand_root_node(self, current_state, network_model):
 
-        hidden_state = network_model.representation_function(current_state.reshape(1, -1))
-        self.hidden_state = hidden_state
+        #current_state = tf.convert_to_tensor(current_state)
+        hidden_state = network_model.representation #(current_state)
+        print(type(hidden_state), 'hidden layer froom nn from classes file')
+        self.hidden_state = tf.convert_to_tensor(hidden_state)
         self.transition_reward = 0  # no transition reward for the root node
 
-        policy, value = network_model.prediction_function(self.hidden_state)
+        policy, value = network_model.prediction(self.hidden_state)
         self.policy = policy
         self.value = value.numpy()[0][0]  # convert to scalar
 

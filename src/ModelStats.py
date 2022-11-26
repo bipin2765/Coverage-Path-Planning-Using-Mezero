@@ -60,9 +60,9 @@ class ModelStats:
     def add_experience(self, experience):
         self.trajectory.append(experience)
 
-    def set_model(self, model):
-        self.tensorboard_callback.set_model(model)
-        self.model = model
+    def set_model(self, model_representation, model_dynamic, model_prediction):
+        self.tensorboard_callback.set_model(model_representation)
+        self.model = model_representation, model_dynamic, model_prediction
 
     def set_env_map_callback(self, callback: callable):
         self.env_map_callback = callback

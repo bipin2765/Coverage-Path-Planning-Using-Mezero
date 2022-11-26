@@ -6,7 +6,7 @@ from tensorflow.keras.losses import binary_crossentropy,mean_squared_error
 import numpy as np
 import pickle
 
-from src.MuZero.classes import Node
+#from src.MuZero.classes import Node
 
 def train(network_model, replay_buffer, config):
 
@@ -19,10 +19,9 @@ def train(network_model, replay_buffer, config):
         for mem in replay_buffer.sample():
 
             memory_length = len(mem.reward_history)
-            sampled_index = np.random.choice(
-                range(memory_length))
+            sampled_index = np.random.choice(range(memory_length))
 
-            hidden_state = network_model.representation_function(mem.state_history[sampled_index])
+            hidden_state = network_model.representation #(mem.state_history[sampled_index])
 
             if (sampled_index + config['train']['num_unroll_steps']) < memory_length:
                 num_unroll_steps = int(config['train']['num_unroll_steps'])
@@ -48,11 +47,8 @@ def train(network_model, replay_buffer, config):
                 true_policy = mem.policy_history[start_index + 1]
 
                 ### calculate loss ###
-                loss += (1 / num_unroll_steps) * (
-                        mean_squared_error(true_reward, pred_reward) + mean_squared_error(true_value, pred_value) + binary_crossentropy(true_policy, pred_policy))  # take the average loss among all unroll steps
-        loss += tf.reduce_sum(network_model.representation_function.losses) + tf.reduce_sum(
-            network_model.dynamics_function.losses) + tf.reduce_sum(
-            network_model.prediction_function.losses)  # regularization loss
+                loss += (1 / num_unroll_steps) * (mean_squared_error(true_reward, pred_reward) + mean_squared_error(true_value, pred_value) + binary_crossentropy(true_policy, pred_policy))  # take the average loss among all unroll steps
+        loss += tf.reduce_sum(network_model.representation_function.losses) + tf.reduce_sum(network_model.dynamics_function.losses) + tf.reduce_sum(network_model.prediction_function.losses)  # regularization loss
 
     ### update network_model weights ###
     grads = tape.gradient(loss, [network_model.representation_function.trainable_variables,

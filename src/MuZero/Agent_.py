@@ -1,7 +1,10 @@
+import sys
+
 import tensorflow as tf
 from tensorflow.keras import Model
 from tensorflow.keras.layers import Conv2D, Dense, Flatten, Concatenate, Input, AvgPool2D, Conv3D
 from tensorflow.keras.regularizers import L2
+Glorot_func = tf.keras.initializers.GlorotUniform(seed=None)
 import numpy as np
 
 from src.CPP.State import CPPState
@@ -10,7 +13,7 @@ import os
 
 
 
-class PPOAgentParams:
+class MuZeroAgentParams:
     def __init__(self):
         # Convolutional part config
         self.conv_layers = 2
@@ -47,7 +50,7 @@ class MuZeroAgent(object):
 
         # Initialization
         self.state_size = states
-        self.state_shape = len(states)
+        #self.state_shape = len(states)
         self.max_average = 0  # when average score is above 0 model will be saved
         self.lr = 0.00025
         self.shuffle = False
@@ -57,8 +60,9 @@ class MuZeroAgent(object):
                            num_actions=self.action_size,
                            params=self.params)
 
+
         if stats:
-            stats.set_model(self.Actor.model)
+            stats.set_model(self.Network_model.representation, self.Network_model.dynamic, self.Network_model.prediction)
 
 
 
@@ -69,6 +73,7 @@ class PartModel:
         self.params = params
 
     def create_map_proc(self, conv_in, name='MuZeroNetwork'):
+        conv_in = tf.convert_to_tensor(conv_in, dtype = tf.float32)
         global_map = tf.stop_gradient(
             AvgPool2D((self.params.global_map_scaling, self.params.global_map_scaling))(conv_in))
 
@@ -96,52 +101,54 @@ class PartModel:
         return Concatenate(name=name + 'concat_flatten')([flatten_global, flatten_local])
 
 
-    def build_model(self, bool_map, scalars, num_actions):
+    def build_model(self, bool_map, scalars, inputs, num_actions, name):
         flatten_map = self.create_map_proc(bool_map)
-        layer = Concatenate([flatten_map, scalars])
-
+        layer = tf.keras.layers.Concatenate(name=name + 'concat')([flatten_map, scalars])
         #Building representation layer
-        obs_input_layer = Input(layer)
-
-        hidden_layer = Dense(self.params.hidden_layer_size, activation = 'relu', bias_initializer = 'glorot uniform',
-                             kernel_regularizer = L2(1e-3), bias_regularizer = L2(1e-3))(obs_input_layer)
+        #obs_input_layer = tf.keras.layers.InputLayer(shape=(32,))
+        hidden_layer = tf.keras.layers.Dense(self.params.hidden_layer_size, activation = 'relu', bias_initializer = Glorot_func,
+                             kernel_regularizer = L2(1e-3), bias_regularizer = L2(1e-3))(layer)
         for _ in range(self.params.hidden_layer_num):
-            hidden_layer = Dense(self.params.hidden_layer_size, activation = 'relu', bias_initializer = 'glorot uniform',
+            hidden_layer = tf.keras.layers.Dense(self.params.hidden_layer_size, activation = 'relu', bias_initializer = Glorot_func,
                              kernel_regularizer=L2(1e-3), bias_regularizer = L2(1e-3))(hidden_layer)
-        hidden_state_output_layer = Dense(self.params.hidden_layer_size, activation = 'relu', bias_initializer = 'glorot uniform',
+        hidden_state_output_layer = tf.keras.layers.Dense(self.params.hidden_layer_size, activation = 'relu', bias_initializer = Glorot_func,
                              kernel_regularizer=L2(1e-3), bias_regularizer = L2(1e-3))(hidden_layer)
-        self.representation_function= Model(obs_input_layer, hidden_state_output_layer)
+        representation_function = tf.keras.Model(inputs, hidden_state_output_layer)
+
+
 
         #Building Dynamic layer
         hidden_state_input_layer = Input(self.params.hidden_layer_size)
         action_input_layer = Input(num_actions)
         concat_layer = Concatenate()([hidden_state_input_layer, action_input_layer])
-        hidden_layer = Dense(self.params.hidden_layer_size, activation='relu', bias_initializer='glorot uniform',
+        hidden_layer = tf.keras.layers.Dense(self.params.hidden_layer_size, activation='relu', bias_initializer=Glorot_func,
                              kernel_regularizer=L2(1e-3), bias_regularizer=L2(1e-3))(concat_layer)
         for _ in range(self.params.hidden_layer_num):
-            hidden_layer = Dense(self.params.hidden_layer_size, activation='relu', bias_initializer='glorot uniform',
+            hidden_layer = tf.keras.layers.Dense(self.params.hidden_layer_size, activation='relu', bias_initializer=Glorot_func,
                              kernel_regularizer=L2(1e-3), bias_regularizer = L2(1e-3))(hidden_layer)
-        hidden_state_output_layer = Dense(self.params.hidden_layer_size, activation='relu', bias_initializer ='glorot uniform',
+        hidden_state_output_layer = tf.keras.layers.Dense(self.params.hidden_layer_size, activation='relu', bias_initializer =Glorot_func,
                              kernel_regularizer=L2(1e-3), bias_regularizer=L2(1e-3))(hidden_layer)
-        transition_reward_output_layer = Dense(1, activation='linear', bias_initializer='glorot_uniform', \
+        transition_reward_output_layer = tf.keras.layers.Dense(1, activation='linear', bias_initializer=Glorot_func, \
                                                kernel_regularizer = L2(1e-3), bias_regularizer = L2(1e-3))(hidden_layer)
 
-        self.dynamics_function = Model([hidden_state_input_layer,action_input_layer], \
+        dynamics_function = tf.keras.Model([hidden_state_input_layer,action_input_layer], \
                                        [hidden_state_output_layer, transition_reward_output_layer])
 
         #Building prediction function layers
         hidden_state_input_layer = Input(self.params.hidden_layer_size)
-        hidden_layer = Dense(self.params.hidden_layer_size, activation = 'relu', bias_initializer = 'glorot uniform', \
+        hidden_layer = tf.keras.layers.Dense(self.params.hidden_layer_size, activation = 'relu', bias_initializer = Glorot_func, \
                              kernel_regularizer = L2(1e-3), bias_regularizer =L2(1e-3))(hidden_state_input_layer)
         for _ in range(self.params.hidden_layer_num):
-            hidden_layer = Dense(self.params.hidden_layer_size, activation = 'relu', bias_initializer ='glorot uniform', \
+            hidden_layer = tf.keras.layers.Dense(self.params.hidden_layer_size, activation = 'relu', bias_initializer =Glorot_func, \
                              kernel_regularizer = L2(1e-3), bias_regularizer = L2(1e-3))(hidden_layer)
-        policy_output_layer = Dense(num_actions, activation = 'softmax', bias_initializer='glorot_uniform', \
+        policy_output_layer = tf.keras.layers.Dense(num_actions, activation = 'softmax', bias_initializer=Glorot_func, \
                                     kernel_regularizer = L2(1e-3), bias_regularizer = L2(1e-3))(hidden_layer)
-        value_output_layer = Dense(1, activation = 'linear', bias_initializer='glorot_uniform', \
+        value_output_layer = tf.keras.layers.Dense(1, activation = 'linear', bias_initializer=Glorot_func, \
                                     kernel_regularizer = L2(1e-3), bias_regularizer = L2(1e-3))(hidden_layer)
 
-        self.prediction_function = Model(hidden_state_input_layer, [policy_output_layer, value_output_layer])
+        prediction_function = tf.keras.Model(hidden_state_input_layer, [policy_output_layer, value_output_layer])
+        return representation_function, dynamics_function, prediction_function
+
 
 
         def save(self, model_name):
@@ -170,10 +177,12 @@ class PartModel:
 class Network(PartModel):
     def __init__(self, input_states, num_actions, params):
         super().__init__(params)
-        self.action_space= num_actions
-        self.model = self.build_model(bool_map=input_states[0],
+        #self.action_space= num_actions
+        self.representation, self.dynamic, self.prediction = self.build_model(bool_map=input_states[0],
                                       scalars=input_states[1],
-                                      num_actions=num_actions)
+                                      inputs = input_states,
+                                      num_actions=num_actions,
+                                      name = 'MuZero')
 
-
+        print('end of model')
 

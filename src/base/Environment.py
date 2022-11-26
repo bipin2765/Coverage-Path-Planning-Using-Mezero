@@ -35,7 +35,7 @@ confignew = {  'action_size' : 5,
                }
 
 class BufferMemory:
-    def __int__(self, init_state = None):
+    def __init__(self, init_state = None):
         if init_state:
             self.state_history = [init_state]  # starts at t = 0
         self.action_history = []  # starts at t = 0
@@ -52,13 +52,13 @@ class BaseEnvironment:
         self.rewards = None
         self.physics = None
         self.display = display
-        self.episode_count = 1
+        self.episode_count = 0
         self.step_count = 0
         self.action_size = 5
 
     def train_episode(self):
         # Create game memory object to store play history
-        _init_state = self.agent.state_size.reshape(1, -1) #states including boolean and scaler in single row.
+        _init_state = self.agent.state_size #.reshape(1, -1) #states including boolean and scaler in single row.
         memory_: BufferMemory = BufferMemory(_init_state)
 
         #self.env.seed(int(np.random.choice(range(int(1e5)))))
@@ -89,6 +89,9 @@ class BaseEnvironment:
             last_step = self.step_count
             self.train_episode()
 
+            if self.episode_count % self.trainer.params.eval_period:
+                self.test_episode
+
             self.stats.save_if_best()
 
         self.stats.training_ended()
@@ -108,10 +111,26 @@ class BaseEnvironment:
         memory_.action_history.append(action)
         memory_.reward_history.append(reward)
         #self.trainer.add_experience(current_state, action, reward)
-        #self.stats.add_experience((current_state, action, reward)
+        self.stats.add_experience((old_state, action, reward, copy.deepcopy(current_state)))
         self.step_count += 1
 
         return copy.deepcopy(current_state)
+
+
+    def test_episode(self, scenario= None):
+        state = copy.deepcopy(self.init_episode(scenario))
+        self.stats.on_episode_begin(self.episode_count)
+        while not state.is_terminal:
+            action_index = mcts(state, self.Network_model, get_temperature(self.episode_count), confignew)
+            current_state = self.physics.step(GridActions(action_index))
+            reward = self.rewards.calculate_reward(state, GridActions(action_index), current_state)
+            action = np.array([1 if i ==action_index else 0 for i in range(self.action_size)]).reshape(-1,1)
+            self.stats.add_experience((copy.deepcopy(state), action, reward, copy.deepcopy(current_state)))
+            state = copy.deepcopy(current_state)
+        self.stats.on_episode_end(self.episode_count)
+        self.stats.log_training_data(step= self.step_count)
+
+
 
 
     def init_episode(self, init_state=None):
