@@ -1,4 +1,8 @@
+<<<<<<< HEAD
 py## Table of contents
+=======
+## Table of contents
+>>>>>>> b5d3836 (Initial Upload)
 
 * [Introduction](#introduction)
 * [Requirements](#requirements)
@@ -45,8 +49,12 @@ python main.py --dh --gpu --config config/manhattan32_dh.json --id manhattan32_d
 Evaluate a model through Monte Carlo analysis over the random parameter space for the performance indicators 'Successful Landing', 'Collection Ratio', 'Collection Ratio and Landed' as defined in the paper (plus 'Boundary Counter' counting safety controller activations), e.g. for 1000 Monte Carlo iterations:
 
 ```
+<<<<<<< HEAD
 
 
+=======
+python main_mc.py --cpp --weights example/models/manhattan32_cpp --config config/manhattan32_cpp.json --id manhattan32_cpp_mc --samples 1000
+>>>>>>> b5d3836 (Initial Upload)
 python main_mc.py --dh --weights example/models/manhattan32_dh --config config/manhattan32_dh.json --id manhattan32_dh_mc --samples 1000
 
 --cpp|--dh                  Activates CPP or DH

@@ -4,6 +4,10 @@ import os
 import numpy as np
 
 from src.CPP.Environment import CPPEnvironment
+<<<<<<< HEAD
+=======
+from src.DH.Environment import DHEnvironment
+>>>>>>> b5d3836 (Initial Upload)
 from utils import override_params, read_config, get_bool_user
 
 
@@ -27,6 +31,11 @@ def scenario(args, params):
     env = None
     if args.cpp:
         env = CPPEnvironment(params)
+<<<<<<< HEAD
+=======
+    elif args.dh:
+        env = DHEnvironment(params)
+>>>>>>> b5d3836 (Initial Upload)
     else:
         print("Need --cpp or --dh")
         exit(1)
@@ -38,6 +47,10 @@ def scenario(args, params):
         scenario = read_config(args.scenario)
         init_state = env.grid.create_scenario(scenario)
 
+<<<<<<< HEAD
+=======
+    env.test_episode(init_state)
+>>>>>>> b5d3836 (Initial Upload)
     env.display.display_episode(env.grid.map_image, env.stats.trajectory, plot=True)
     if args.video:
         save_video(env)

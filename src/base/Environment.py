@@ -1,6 +1,8 @@
 import copy
 import tqdm
 import distutils.util
+import numpy as np
+import tensorflow as tf
 
 from src.ModelStats import ModelStatsParams, ModelStats
 from src.base.BaseDisplay import BaseDisplay
@@ -11,22 +13,25 @@ from src.MuZero.classes import *
 from src.MuZero.replay_memory import ReplayBuffer
 from src.MuZero.Train import train
 
+
 class BaseEnvironmentParams:
     def __init__(self):
         self.model_stats_params = ModelStatsParams()
 
 confignew = {  'action_size' : 5,
-               'mcts': { 'num_simulations': 1e3, # number of simulations to conduct, every time we call MCTS
+               'mcts': { 'num_simulations':50,# number of simulations to conduct, every time we call MCTS
                          'c1': 1.25, # for regulating MCTS search exploration (higher value = more emphasis on prior value and visit count)
-                         'c2': 19625 }, # for regulating MCTS search exploration (higher value = lower emphasis on prior value and visit count)
+                         'c2': 19652,
+                         'dirichlet_alpha': 0.3,
+                         'exploration_fraction': 0.25}, # for regulating MCTS search exploration (higher value = lower emphasis on prior value and visit count)
                'self_play': { 'num_games': 5000, # number of games the agent plays to train on
-                              'discount_factor': 1.0, # used when backpropagating values up mcts, and when calculating bootstrapped value during training
+                              'discount_factor': 0.997, # used when backpropagating values up mcts, and when calculating bootstrapped value during training
                               'save_interval': 100}, # how often to save network_model weights and replay_buffer
-               'replay_buffer': { 'buffer_size': 1e3, # size of the buffer
+               'replay_buffer': { 'buffer_size': 1000,# size of the buffer
                                   'sample_size': 1e2}, # how many games we sample from the buffer when training the agent
-               'train': { 'num_bootstrap_timesteps': 500, # number of timesteps in the future to bootstrap true value
-                          'num_unroll_steps': 1e1, # number of timesteps to unroll to match action trajectories for each game sample
-                          'learning_rate': 1e-3, # learning rate for Adam optimizer
+               'train': { 'num_bootstrap_timesteps':500,# number of timesteps in the future to bootstrap true value
+                          'num_unroll_steps': 500,# number of timesteps to unroll to match action trajectories for each game sample
+                          'learning_rate': 1e-6, # learning rate for Adam optimizer
                           'beta_1': 0.9, # parameter for Adam optimizer
                           'beta_2': 0.999}, # parameter for Adam optimizer
                'test': { 'num_test_games': 10, # number of times to test the agent using greedy actions
@@ -35,19 +40,20 @@ confignew = {  'action_size' : 5,
                }
 
 class BufferMemory:
-    def __init__(self, init_state = None):
-        if init_state:
-            self.state_history = [init_state]  # starts at t = 0
+    def __init__(self):  #, init_state = None
+        #if init_state:
+        self.state_history = []  # starts at t = 0
         self.action_history = []  # starts at t = 0
         self.reward_history = []  # starts at t = 1 (the transition reward for reaching state 1)
         self.value_history = []  # starts at t = 0 (from MCTS)
         self.policy_history = []  # starts at t = 0 (from MCTS)
 
+
 class BaseEnvironment:
     def __init__(self, params: BaseEnvironmentParams, display: BaseDisplay):
         self.stats = ModelStats(params.model_stats_params, display=display)
         self.trainer = None
-        self.agent: MuZeroAgent = None
+        self.agent = None
         self.grid = None
         self.rewards = None
         self.physics = None
@@ -58,27 +64,30 @@ class BaseEnvironment:
 
     def train_episode(self):
         # Create game memory object to store play history
-        _init_state = self.agent.state_size #.reshape(1, -1) #states including boolean and scaler in single row.
-        memory_: BufferMemory = BufferMemory(_init_state)
+        _init_state = self.agent.state_size #states including boolean and scaler in list.
+        memory_: BufferMemory = BufferMemory()
 
-        #self.env.seed(int(np.random.choice(range(int(1e5)))))
+        #print(memory_, 'is memoryyyyyyyyyyyyyy')
+
         state = copy.deepcopy(self.init_episode())
         self.stats.on_episode_begin(self.episode_count)
         while not state.is_terminal():
             state = self.step(state, memory_)
-        self.replay_buffer.add(memory_)
-        train(self.agent.Network_model, self.replay_buffer, confignew)
+        #print('Terminal occurred and now we go to train...............................................')
+
+        replay_buffer = ReplayBuffer(confignew)
+        replay_buffer.add(memory_)
+
+        train(self.agent.Network_model, confignew, replay_buffer)
 
         self.stats.on_episode_end(self.episode_count)
         self.stats.log_training_data(step=self.step_count)
-
 
         self.episode_count += 1
 
 
     def run(self):
-
-        self.replay_buffer = ReplayBuffer(confignew)
+        self.all_reward = []
         print(type(self.agent))
         print('Running ', self.stats.params.log_file_name)
 
@@ -88,49 +97,55 @@ class BaseEnvironment:
             bar.update(self.step_count - last_step)
             last_step = self.step_count
             self.train_episode()
-
             if self.episode_count % self.trainer.params.eval_period:
-                self.test_episode
+                self.test_episode()
 
             self.stats.save_if_best()
-
+        print(self.all_reward)
         self.stats.training_ended()
 
-    def step(self, state, memory_: BufferMemory):
-        if type(state) == CPPState:
-            state = self.agent.Network_model.transfrom_state(state)
+    def step(self, state_, memory_: BufferMemory):
+        if type(state_) == CPPState:
+            state = self.agent.Network_model.transfrom_state(state_, for_prediction= True)
 
-        old_state = copy.deepcopy(state)
-        action_index = mcts(old_state, self.agent.Network_model, get_temperature(self.episode_count),confignew)
+        #old_state = copy.deepcopy(state)
+        action_index, value, policy = mcts(state, self.agent.Network_model, get_temperature(self.episode_count),confignew)
 
-        current_state = self.physics.step(GridActions(action_index))
-        reward = self.rewards.calculate_reward(old_state, GridActions(action_index), current_state)
+        #print(action_index,'is actionnnnn')
+
+        next_state = self.physics.step(GridActions(action_index))
+        reward = self.rewards.calculate_reward(state_, GridActions(action_index), next_state)
         action = np.array([1 if i==action_index else 0 for i in range(self.action_size)]).reshape(1,-1)
 
-        memory_.state_history.append(current_state.reshape(1, -1))
+        memory_.state_history.append(next_state)
         memory_.action_history.append(action)
         memory_.reward_history.append(reward)
+        memory_.value_history.append(value)
+        memory_.policy_history.append(policy)
         #self.trainer.add_experience(current_state, action, reward)
-        self.stats.add_experience((old_state, action, reward, copy.deepcopy(current_state)))
+
+        self.all_reward.append(reward)
+
+        self.stats.add_experience((state, action, reward, copy.deepcopy(next_state)))
         self.step_count += 1
 
-        return copy.deepcopy(current_state)
+
+        return copy.deepcopy(next_state)
 
 
     def test_episode(self, scenario= None):
-        state = copy.deepcopy(self.init_episode(scenario))
-        self.stats.on_episode_begin(self.episode_count)
-        while not state.is_terminal:
-            action_index = mcts(state, self.Network_model, get_temperature(self.episode_count), confignew)
-            current_state = self.physics.step(GridActions(action_index))
-            reward = self.rewards.calculate_reward(state, GridActions(action_index), current_state)
-            action = np.array([1 if i ==action_index else 0 for i in range(self.action_size)]).reshape(-1,1)
-            self.stats.add_experience((copy.deepcopy(state), action, reward, copy.deepcopy(current_state)))
-            state = copy.deepcopy(current_state)
-        self.stats.on_episode_end(self.episode_count)
-        self.stats.log_training_data(step= self.step_count)
-
-
+        pass
+        # state = copy.deepcopy(self.init_episode(scenario))
+        # self.stats.on_episode_begin(self.episode_count)
+        # while not state.is_terminal:
+        #     action_index = mcts(state, self.agent.Network_model, get_temperature(self.episode_count), confignew)
+        #     current_state = self.physics.step(GridActions(action_index))
+        #     reward = self.rewards.calculate_reward(state, GridActions(action_index), current_state)
+        #     action = np.array([1 if i ==action_index else 0 for i in range(self.action_size)]).reshape(-1,1)
+        #     self.stats.add_experience((copy.deepcopy(state), action, reward, copy.deepcopy(current_state)))
+        #     state = copy.deepcopy(current_state)
+        # self.stats.on_episode_end(self.episode_count)
+        # self.stats.log_training_data(step= self.step_count)
 
 
     def init_episode(self, init_state=None):
@@ -182,15 +197,21 @@ class BaseEnvironment:
             pass
 
 
-def mcts(reset_state, network_model, temperature, confignew):
+def mcts(initial_state, network_model, temperature, confignew):
 
 
     root_node = Node(0)
-    root_node.expand_root_node(reset_state, network_model)
-    game_memory: BufferMemory = BufferMemory()
+    root_node.expand_root_node(initial_state, network_model)
 
+    # add exploration noise to the root node
+    dirichlet_alpha = confignew['mcts']['dirichlet_alpha']
+    exploration_fraction = confignew['mcts']['exploration_fraction']
+    root_node.add_exploration_noise(dirichlet_alpha, exploration_fraction)
+
+    #game_memory: BufferMemory = BufferMemory()
     min_q_value, max_q_value = root_node.value, root_node.value  # keep track of min and max mean-Q values to normalize them during selection phase
     # this is for environments that have unbounded Q-values, otherwise the prior could potentially have very little influence over selection, if Q-values are large
+    #print(min_q_value, max_q_value, 'is min and max q_values')
     for _ in range(int(confignew['mcts']['num_simulations'])):
         current_node = root_node
 
@@ -203,14 +224,20 @@ def mcts(reset_state, network_model, temperature, confignew):
             total_num_visits = max(1, sum([current_node.children[i].num_visits for i in
                                            range(len(current_node.children))]))
 
+            #print(total_num_visits, 'is total number of visits')
+
             action_index = np.argmax(
                 [current_node.children[i].get_ucb_score(total_num_visits, min_q_value, max_q_value, confignew) for i in
                  range(len(current_node.children))])
+
+            #print(action_index, 'is action index which is also output of np.argmax from UCB score')
             current_node = current_node.children[action_index]
 
             search_path.append(current_node)
             action_history.append(
                 np.array([1 if i == action_index else 0 for i in range(confignew['action_size'])]).reshape(1, -1))
+
+            #print(action_history, 'is action hisory where 5 elements of list in onehot encoded appended')
 
         # EXPAND selected leaf node
         current_node.expand_node(search_path[-2].hidden_state, action_history[-1], network_model)
@@ -225,25 +252,27 @@ def mcts(reset_state, network_model, temperature, confignew):
             min_q_value, max_q_value = min(min_q_value, node_q_value), max(max_q_value,
                                                                            node_q_value)  # update min and max values
 
-            value = node.transition_reward + confignew['self_play'][
-                'discount_factor'] * value  # updated for parent node in next iteration of the loop
+            value = node.transition_reward + confignew['self_play']['discount_factor'] * value  # updated for parent node in next iteration of the loop
 
     # SAMPLE an action proportional to the visit count of the child nodes of the root node
     total_num_visits = sum([root_node.children[i].num_visits for i in range(len(root_node.children))])
     policy = np.array([root_node.children[i].num_visits / total_num_visits for i in range(len(root_node.children))])
 
+    #print(policy, 'is policy before temperature calculation')
+
     if temperature == None:  # take the greedy action (to be used during test time)
         action_index = np.argmax(policy)
     else:  # otherwise sample (to be used during training)
         policy = (policy ** (1 / temperature)) / (policy ** (1 / temperature)).sum()
-        action_index = np.random.choice(range(network_model.action_size), p=policy)
+        action_index = np.random.choice(range(confignew['action_size']), p=policy)
 
     # update Game search statistics
-    game_memory.value_history.append(
-        root_node.cumulative_value / root_node.num_visits)  # use the root node's MCTS value as the ground truth value when training
-    game_memory.policy_history.append(policy)  # use the MCTS policy as the ground truth value when training
-
-    return action_index
+    value = (root_node.cumulative_value / root_node.num_visits)
+    # game_memory.value_history.append(
+    #     root_node.cumulative_value / root_node.num_visits)  # use the root node's MCTS value as the ground truth value when training
+    # game_memory.policy_history.append(policy)  # use the MCTS policy as the ground truth value when training
+    #print(policy, 'final policy of mcts return')
+    return action_index, value, policy
 
 
 def get_temperature(num_iter):
@@ -259,20 +288,17 @@ def get_temperature(num_iter):
     """
 
     # as num_iter increases, temperature decreases, and actions become greedier
-    if num_iter < 100:
+    if num_iter < 25:
         return 3
-    elif num_iter < 200:
+    elif num_iter < 50:
         return 2
-    elif num_iter < 300:
+    elif num_iter < 100:
         return 1
-    elif num_iter < 400:
+    elif num_iter < 200:
         return .5
-    elif num_iter < 500:
+    elif num_iter < 400:
         return .25
-    elif num_iter < 600:
+    elif num_iter < 500:
         return .125
     else:
         return .0625
-
-
-

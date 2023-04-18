@@ -6,13 +6,12 @@ from types import SimpleNamespace as Namespace
 
 from src.CPP.Environment import CPPEnvironmentParams, CPPEnvironment
 
-
 from utils import *
 
 
 def main_cpp(p):
     env = CPPEnvironment(p)
-    
+
     env.run()
 
 

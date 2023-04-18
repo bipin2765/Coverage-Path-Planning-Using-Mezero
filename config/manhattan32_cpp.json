@@ -1,7 +1,7 @@
 {
     "model_stats_params": {
         "save_model": "models/manhattan32_cpp",
-        "moving_average_length": 100,
+        "moving_average_length": 200,
         "log_file_name": "manhattan32_cpp",
         "training_images": false
     },
@@ -30,7 +30,7 @@
     },
     "trainer_params": {
         "batch_size": 128,
-        "num_steps": 50000,
+        "num_steps": 2000,
         "rm_pre_fill_ratio": 0.5,
         "rm_pre_fill_random": true,
         "eval_period": 5,
