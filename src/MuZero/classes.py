@@ -70,6 +70,7 @@ class Node:
                     max_q_value - min_q_value)  # min-max normalize q-value, to make sure q-value is in the interval [0,1]
         # if min and max value are equal, we would end up dividing by 0
         #print(self.cumulative_value, 'is cumulative value ')
+        #'new comnit'
         return normalized_q_value + \
                self.prior * np.sqrt(visit_sum) / (1 + self.num_visits) * \
                (config['mcts']['c1'] + np.log((visit_sum + config['mcts']['c2'] + 1) / config['mcts']['c2']))
