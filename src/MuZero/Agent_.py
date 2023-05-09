@@ -22,8 +22,8 @@ class MuZeroAgentParams:
 
         # Fully Connected config
         self.hidden_layer_size = 256
-        self.hidden_updated_layer_size = 32
-        self.hidden_layer_num = 1
+        #self.hidden_updated_layer_size = 32
+        self.hidden_layer_num = 3
 
         # Training Params
         self.learning_rate = 3e-5
@@ -60,12 +60,11 @@ class MuZeroAgent(object):
         self.Network_model = Network(input_states=self.state_size,
                                 num_actions=self.action_size,
                                 params=self.params)
-        partmodel = PartModel(self.params)
+        #partmodel = PartModel(self.params)
 
 
         if stats:
-            stats.set_model(self.Network_model.representation)
-
+            stats.set_model(self.Network_model.model)
 class PartModel:
     def __init__(self, params):
         self.params = params
@@ -102,11 +101,12 @@ class PartModel:
     def build_model(self, bool_map, scalars, inputs, num_actions, name):
         flatten_map = self.create_map_proc(bool_map)
         layer = tf.keras.layers.Concatenate(name=name + 'concat')([flatten_map, scalars])
+        layer_ = layer
 
         for k in range(self.params.hidden_layer_num):
             layer = Dense(self.params.hidden_layer_size, activation='relu', name=name + 'hidden_layer_all_' + str(k))(
                 layer)
-        hidden_state_output_layer = tf.keras.layers.Dense(256, activation = 'relu', bias_initializer = Glorot_func,
+        hidden_state_output_layer = tf.keras.layers.Dense(self.params.hidden_layer_size, activation = 'relu', bias_initializer = Glorot_func,
                               kernel_regularizer=L2(1e-3), bias_regularizer = L2(1e-3))(layer)
         self.representation_function = tf.keras.Model(inputs, hidden_state_output_layer)
         print(tf.keras.Model.summary)
@@ -114,15 +114,15 @@ class PartModel:
 
 
         #Building Dynamic layer
-        hidden_state_input_layer = Input(256)
+        hidden_state_input_layer = Input(self.params.hidden_layer_size)
         action_input_layer = Input(num_actions)
         concat_layer = Concatenate()([hidden_state_input_layer, action_input_layer])
-        hidden_layer = tf.keras.layers.Dense(256, activation='relu', bias_initializer=Glorot_func,
+        hidden_layer = tf.keras.layers.Dense(self.params.hidden_layer_size, activation='relu', bias_initializer=Glorot_func,
                              kernel_regularizer=L2(1e-3), bias_regularizer=L2(1e-3))(concat_layer)
         for _ in range(self.params.hidden_layer_num):
             hidden_layer = tf.keras.layers.Dense(self.params.hidden_layer_size, activation='relu', bias_initializer=Glorot_func,
                              kernel_regularizer=L2(1e-3), bias_regularizer = L2(1e-3))(hidden_layer)
-        hidden_state_output_layer = tf.keras.layers.Dense(256, activation='relu', bias_initializer =Glorot_func,
+        hidden_state_output_layer = tf.keras.layers.Dense(self.params.hidden_layer_size, activation='relu', bias_initializer =Glorot_func,
                              kernel_regularizer=L2(1e-3), bias_regularizer=L2(1e-3))(hidden_layer)
         transition_reward_output_layer = tf.keras.layers.Dense(1, activation='linear', bias_initializer=Glorot_func, \
                                                kernel_regularizer = L2(1e-3), bias_regularizer = L2(1e-3))(hidden_layer)
@@ -131,7 +131,7 @@ class PartModel:
                                        [hidden_state_output_layer, transition_reward_output_layer])
 
         #Building prediction function layers
-        hidden_state_input_layer = Input(256)
+        hidden_state_input_layer = Input(self.params.hidden_layer_size)
         hidden_layer = tf.keras.layers.Dense(self.params.hidden_layer_size, activation = 'relu', bias_initializer = Glorot_func, \
                              kernel_regularizer = L2(1e-3), bias_regularizer =L2(1e-3))(hidden_state_input_layer)
         for _ in range(self.params.hidden_layer_num):
@@ -143,22 +143,27 @@ class PartModel:
                                     kernel_regularizer = L2(1e-3), bias_regularizer = L2(1e-3))(hidden_layer)
 
         self.prediction_function = tf.keras.Model(hidden_state_input_layer, [policy_output_layer, value_output_layer])
+
+        print(self.representation_function.summary(), self.prediction_function.summary(), self.dynamics_function.summary())
+
         return self.representation_function, self.dynamics_function, self.prediction_function
 
+    def build_combined_model(self, bool_map, inputs, num_actions, name):
+        #inputs = Input(shape=bool_map.shape)
+        #hidden_state_output_layer = self.create_map_proc(bool_map)
+        hidden_state_output_layer = self.representation_function(inputs)
 
+        action_input_layer = Input(shape=(num_actions,))
+        hidden_state_output_layer, transition_reward_output_layer = self.dynamics_function(
+            [hidden_state_output_layer, action_input_layer])
 
-        def save(self, model_name):
+        policy_output_layer, value_output_layer = self.prediction_function(hidden_state_output_layer)
 
-            os.mkdir(f'models/{model_name}')
-            self.representation_function.save_weights(f'models/{model_name}/representation_function_weights.h5')
-            self.dynamics_function.save_weights(f'models/{model_name}/dynamics_function_weights.h5')
-            self.prediction_function.save_weights(f'models/{model_name}/prediction_function_weights.h5')
+        model = tf.keras.Model(inputs=[inputs, action_input_layer],
+                               outputs=[policy_output_layer, value_output_layer, transition_reward_output_layer])
+        #print(model.summary())
+        return model
 
-        def load(self, model_name):
-
-            self.representation_function.load_weights(f'models/{model_name}/representation_function_weights.h5')
-            self.dynamics_function.load_weights(f'models/{model_name}/dynamics_function_weights.h5')
-            self.prediction_function.load_weights(f'models/{model_name}/prediction_function_weights.h5')
 
 
     def transfrom_state(self, state: CPPState, for_prediction=False):
@@ -179,10 +184,22 @@ class Network(PartModel):
                                       inputs = input_states,
                                       num_actions=num_actions,
                                       name = 'MuZero')
+        self.model = self.build_combined_model(bool_map=input_states[0],
+                                               inputs = input_states,
+                                               num_actions= num_actions, name='MuZeroCombinedNetwork')
 
-    #def optimize_model(self, loss):
-    #    self.model.compile(loss, optimizer=optimizer(learning_rate=self.params.learning_rate))
 
+        def save(self, model_name):
 
-        print('end of model')
+            os.mkdir(f'models/{model_name}')
+            self.representation_function.save_weights(f'models/{model_name}/representation_function_weights.h5')
+            self.dynamics_function.save_weights(f'models/{model_name}/dynamics_function_weights.h5')
+            self.prediction_function.save_weights(f'models/{model_name}/prediction_function_weights.h5')
+
+        def load(self, model_name):
+
+            self.representation_function.load_weights(f'models/{model_name}/representation_function_weights.h5')
+            self.dynamics_function.load_weights(f'models/{model_name}/dynamics_function_weights.h5')
+            self.prediction_function.load_weights(f'models/{model_name}/prediction_function_weights.h5')
+
 

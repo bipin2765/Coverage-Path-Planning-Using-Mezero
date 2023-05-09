@@ -10,7 +10,7 @@ class CPPDisplay(BaseDisplay):
         super().__init__()
 
     def display_episode(self, env_map: Map, trajectory, plot=False, save_path=None):
-
+        #print(trajectory, 'is trajectory')
         first_state = trajectory[0][0]
         final_state = trajectory[-1][3]
 

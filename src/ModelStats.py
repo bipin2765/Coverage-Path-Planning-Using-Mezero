@@ -61,9 +61,9 @@ class ModelStats:
         self.trajectory.append(experience)
 
 
-    def set_model(self, model_representation, model_dynamic, model_prediction):
-        self.tensorboard_callback.set_model(model_representation)
-        self.model = model_representation, model_dynamic, model_prediction
+    # def set_model_(self, model_representation, model_dynamic, model_prediction):
+    #     self.tensorboard_callback.set_model(model_representation)
+    #     self.model = model_representation, model_dynamic, model_prediction
 
     def set_model(self, model):
         self.tensorboard_callback.set_model(model)
@@ -93,8 +93,7 @@ class ModelStats:
             tf.summary.scalar(callback[0], callback[1](), step=step)
         if images:
             trajectory = self.display.display_episode(self.env_map_callback(), trajectory=self.trajectory)
-            tf.summary.image('trajectory', trajectory,
-                             step=step)
+            tf.summary.image('trajectory', trajectory,step=step)
 
     def save_if_best(self):
         if len(self.evaluation_deque) < self.params.moving_average_length:
@@ -129,4 +128,7 @@ class ModelStats:
 
     def on_episode_end(self, episode_count):
         self.tensorboard_callback.on_epoch_end(episode_count)
+
+    def final_callbacks_value(self):
+        return self.log_value_callbacks
 

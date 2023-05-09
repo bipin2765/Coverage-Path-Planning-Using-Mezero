@@ -3,6 +3,10 @@ import tqdm
 import distutils.util
 import numpy as np
 import tensorflow as tf
+import csv
+import matplotlib.pyplot as plt
+import pandas as pd
+
 
 from src.ModelStats import ModelStatsParams, ModelStats
 from src.base.BaseDisplay import BaseDisplay
@@ -22,16 +26,16 @@ confignew = {  'action_size' : 5,
                'mcts': { 'num_simulations':50,# number of simulations to conduct, every time we call MCTS
                          'c1': 1.25, # for regulating MCTS search exploration (higher value = more emphasis on prior value and visit count)
                          'c2': 19652,
-                         'dirichlet_alpha': 0.3,
+                         'dirichlet_alpha': 0.25,
                          'exploration_fraction': 0.25}, # for regulating MCTS search exploration (higher value = lower emphasis on prior value and visit count)
-               'self_play': { 'num_games': 5000, # number of games the agent plays to train on
-                              'discount_factor': 0.997, # used when backpropagating values up mcts, and when calculating bootstrapped value during training
+               'self_play': { 'num_games': 2e6, # number of games the agent plays to train on
+                              'discount_factor': 0.95, # used when backpropagating values up mcts, and when calculating bootstrapped value during training
                               'save_interval': 100}, # how often to save network_model weights and replay_buffer
-               'replay_buffer': { 'buffer_size': 1000,# size of the buffer
+               'replay_buffer': { 'buffer_size': 10000,# size of the buffer
                                   'sample_size': 1e2}, # how many games we sample from the buffer when training the agent
-               'train': { 'num_bootstrap_timesteps':500,# number of timesteps in the future to bootstrap true value
-                          'num_unroll_steps': 500,# number of timesteps to unroll to match action trajectories for each game sample
-                          'learning_rate': 1e-6, # learning rate for Adam optimizer
+               'train': { 'num_bootstrap_timesteps':5,# number of timesteps in the future to bootstrap true value
+                          'num_unroll_steps': 5,# number of timesteps to unroll to match action trajectories for each game sample
+                          'learning_rate': 3e-05, # learning rate for Adam optimizer
                           'beta_1': 0.9, # parameter for Adam optimizer
                           'beta_2': 0.999}, # parameter for Adam optimizer
                'test': { 'num_test_games': 10, # number of times to test the agent using greedy actions
@@ -48,6 +52,8 @@ class BufferMemory:
         self.value_history = []  # starts at t = 0 (from MCTS)
         self.policy_history = []  # starts at t = 0 (from MCTS)
 
+Final_training_results = []
+Final_test_results = []
 
 class BaseEnvironment:
     def __init__(self, params: BaseEnvironmentParams, display: BaseDisplay):
@@ -73,21 +79,28 @@ class BaseEnvironment:
         self.stats.on_episode_begin(self.episode_count)
         while not state.is_terminal():
             state = self.step(state, memory_)
-        #print('Terminal occurred and now we go to train...............................................')
 
         replay_buffer = ReplayBuffer(confignew)
         replay_buffer.add(memory_)
-
+        #print(self.all_reward, 'reward from each iteration')
         train(self.agent.Network_model, confignew, replay_buffer)
+
+        train_results = self.stats.final_callbacks_value()
+        for key, value in train_results:
+            bound_method = value
+            Unbounded = bound_method()
+            each_episode_result = [key, Unbounded]
+            Final_training_results.append(each_episode_result)
 
         self.stats.on_episode_end(self.episode_count)
         self.stats.log_training_data(step=self.step_count)
 
         self.episode_count += 1
+        #print(self.episode_count, 'is episode count')
 
 
     def run(self):
-        self.all_reward = []
+        #self.all_reward = []
         print(type(self.agent))
         print('Running ', self.stats.params.log_file_name)
 
@@ -97,21 +110,90 @@ class BaseEnvironment:
             bar.update(self.step_count - last_step)
             last_step = self.step_count
             self.train_episode()
-            if self.episode_count % self.trainer.params.eval_period:
+            if self.episode_count % self.trainer.params.eval_period == 0:
                 self.test_episode()
 
             self.stats.save_if_best()
-        print(self.all_reward)
+        #print(self.all_reward, 'is reward')
         self.stats.training_ended()
+
+        Training_file = self.generating_csv_file(Final_training_results, 'Training data')
+        Testing_file = self.generating_csv_file(Final_test_results, 'Testing data')
+
+        Training_result_graph = self.Graph_visualization('Training')
+        Testing_result_graph = self.Graph_visualization('Test')
+
+
+    def Graph_visualization(self, name):
+        #Read the CSV file.
+        if name == 'Training':
+            df = pd.read_csv('Training.csv')
+        elif name == 'Test':
+            df = pd.read_csv('Testing.csv')
+
+        # Plot each column as a line plot
+        graph_name = ['cumulative_reward', 'cral', 'cr', 'successful_landing', 'boundary_counter', 'landing_attempts', 'movement_ratio']
+
+        # Plot each column using a different plot type
+        columns = ['cumulative_reward', 'cral', 'cr', 'successful_landing', 'boundary_counter', 'landing_attempts', 'movement_ratio']
+        for i, column in enumerate(columns):
+            if graph_name[i] == 'cumulative_reward':
+                plt.plot(df[column])
+            elif graph_name[i] == 'cral':
+                plt.plot(df[column])
+            elif graph_name[i] == 'cr':
+                plt.plot(df[column])
+            elif graph_name[i] == 'successful_landing':
+                plt.plot(df[column])
+            elif graph_name[i] == 'boundary_counter':
+                plt.plot(df[column])
+            elif graph_name[i] == 'landing_attempts':
+                plt.plot(df[column])
+            elif graph_name[i] == 'movement_ratio':
+                plt.plot(df[column])
+            plt.title(f'Line Plot of {column} from {name}')
+            plt.show()
+
+
+    def generating_csv_file(self, data, name):
+        results = {}
+        # Loop through the list of lists and store the values in the dictionary
+        for item in data:
+            key, value = item
+            if key not in results:
+                results[key] = []
+            results[key].append(value)
+
+        # Write the dictionary to a CSV file
+        if name == 'Training data':
+            with open('Training.csv', 'w', newline='') as f:
+                writer = csv.writer(f)
+                writer.writerow(
+                    ['cumulative_reward', 'cral', 'cr', 'successful_landing', 'boundary_counter', 'landing_attempts',
+                     'movement_ratio'])
+                writer.writerows(zip(*[results[key] for key in
+                                       ['cumulative_reward', 'cral', 'cr', 'successful_landing', 'boundary_counter',
+                                        'landing_attempts', 'movement_ratio']]))
+        elif name== 'Testing data':
+            with open('Testing.csv', 'w', newline='') as f:
+                writer = csv.writer(f)
+                writer.writerow(
+                    ['cumulative_reward', 'cral', 'cr', 'successful_landing', 'boundary_counter', 'landing_attempts',
+                     'movement_ratio'])
+                writer.writerows(zip(*[results[key] for key in
+                                       ['cumulative_reward', 'cral', 'cr', 'successful_landing', 'boundary_counter',
+                                        'landing_attempts', 'movement_ratio']]))
+
+
 
     def step(self, state_, memory_: BufferMemory):
         if type(state_) == CPPState:
             state = self.agent.Network_model.transfrom_state(state_, for_prediction= True)
 
         #old_state = copy.deepcopy(state)
-        action_index, value, policy = mcts(state, self.agent.Network_model, get_temperature(self.episode_count),confignew)
+        action_index, value, policy = mcts(state, self.agent.Network_model, get_temperature(self.step_count),confignew)
 
-        #print(action_index,'is actionnnnn')
+        #print(f' {action_index} is action and {self.step_count} is step count')
 
         next_state = self.physics.step(GridActions(action_index))
         reward = self.rewards.calculate_reward(state_, GridActions(action_index), next_state)
@@ -124,29 +206,39 @@ class BaseEnvironment:
         memory_.policy_history.append(policy)
         #self.trainer.add_experience(current_state, action, reward)
 
-        self.all_reward.append(reward)
+        #self.all_reward.append(reward)
 
-        self.stats.add_experience((state, action, reward, copy.deepcopy(next_state)))
+        self.stats.add_experience((state_, action, reward, copy.deepcopy(next_state)))
         self.step_count += 1
-
 
         return copy.deepcopy(next_state)
 
 
-    def test_episode(self, scenario= None):
-        pass
-        # state = copy.deepcopy(self.init_episode(scenario))
-        # self.stats.on_episode_begin(self.episode_count)
-        # while not state.is_terminal:
-        #     action_index = mcts(state, self.agent.Network_model, get_temperature(self.episode_count), confignew)
-        #     current_state = self.physics.step(GridActions(action_index))
-        #     reward = self.rewards.calculate_reward(state, GridActions(action_index), current_state)
-        #     action = np.array([1 if i ==action_index else 0 for i in range(self.action_size)]).reshape(-1,1)
-        #     self.stats.add_experience((copy.deepcopy(state), action, reward, copy.deepcopy(current_state)))
-        #     state = copy.deepcopy(current_state)
-        # self.stats.on_episode_end(self.episode_count)
-        # self.stats.log_training_data(step= self.step_count)
 
+    def test_episode(self, scenario= None):
+        print('Testing started')
+        state_ = copy.deepcopy(self.init_episode(scenario))
+        self.stats.on_episode_begin(self.episode_count)
+
+        while not state_.is_terminal():
+            if type(state_) == CPPState:
+                state = self.agent.Network_model.transfrom_state(state_, for_prediction=True)
+
+            action_index, value, policy = mcts(state, self.agent.Network_model, get_temperature(self.step_count), confignew)
+            next_state = self.physics.step(GridActions(action_index))
+            reward = self.rewards.calculate_reward(state_, GridActions(action_index), next_state)
+            self.stats.add_experience((copy.deepcopy(state_), action_index, reward, copy.deepcopy(next_state)))
+            state_ = copy.deepcopy(next_state)
+
+        test_results = self.stats.final_callbacks_value()
+        for key, value in test_results:
+            bound_method = value
+            Unbounded = bound_method()
+            each_episode_result = [key, Unbounded]
+            Final_test_results.append(each_episode_result)
+
+        self.stats.on_episode_end(self.episode_count)
+        self.stats.log_testing_data(step=self.step_count)
 
     def init_episode(self, init_state=None):
         if init_state:
@@ -288,17 +380,18 @@ def get_temperature(num_iter):
     """
 
     # as num_iter increases, temperature decreases, and actions become greedier
-    if num_iter < 25:
+
+    if num_iter < 500000:
         return 3
-    elif num_iter < 50:
+    elif num_iter < 900000:
         return 2
-    elif num_iter < 100:
+    elif num_iter < 1250000:
         return 1
-    elif num_iter < 200:
+    elif num_iter < 1450000:
         return .5
-    elif num_iter < 400:
+    elif num_iter < 1700000:
         return .25
-    elif num_iter < 500:
+    elif num_iter < 1900000:
         return .125
     else:
         return .0625

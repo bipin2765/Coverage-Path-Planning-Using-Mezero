@@ -30,7 +30,7 @@
     },
     "trainer_params": {
         "batch_size": 128,
-        "num_steps": 2000,
+        "num_steps":500,
         "rm_pre_fill_ratio": 0.5,
         "rm_pre_fill_random": true,
         "eval_period": 5,
@@ -42,7 +42,7 @@
         "conv_kernel_size": 5,
         "conv_kernels": 16,
         "hidden_layer_size": 256,
-        "hidden_layer_num": 1,
+        "hidden_layer_num": 3,
         "learning_rate": 3e-05,
         "alpha": 0.005,
         "gamma": 0.95,

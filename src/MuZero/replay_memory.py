@@ -15,5 +15,6 @@ class ReplayBuffer:
 
     def sample(self):
 
-        if len(self.buffer) <= self.sample_size: return self.buffer.copy()
+        if len(self.buffer) <= self.sample_size:
+            return self.buffer.copy()
         return np.random.choice(self.buffer, size=self.sample_size, replace=False).tolist()

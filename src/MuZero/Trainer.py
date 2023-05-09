@@ -3,7 +3,7 @@ from src.CPP.State import CPPState
 class TrainerParams:
     def __init__(self):
         self.load_model = ""
-        self.num_steps = 1e6
+        self.num_steps = 2e6
         self.eval_period = 5
 
 class Trainer:

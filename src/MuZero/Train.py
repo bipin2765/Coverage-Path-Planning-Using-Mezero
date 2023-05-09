@@ -24,7 +24,7 @@ def train(network_model, config, replay_buffer):
         for mem in replay_buffer.sample():
 
             memory_length = len(mem.reward_history)
-            print(memory_length, 'is length of memory..........................')
+            #print(memory_length, 'is length of memory..........................')
             sampled_index = np.random.choice(range(memory_length))
             memory_state= (mem.state_history[sampled_index])
             new_states = [np.asarray([memory_state.get_boolean_map()]).astype('float32'),
