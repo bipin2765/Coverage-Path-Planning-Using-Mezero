@@ -70,10 +70,10 @@ class BaseEnvironment:
 
     def train_episode(self):
         # Create game memory object to store play history
-        _init_state = self.agent.state_size #states including boolean and scaler in list.
+        #_init_state = self.agent.state_size #states including boolean and scaler in list.
         memory_: BufferMemory = BufferMemory()
 
-        #print(memory_, 'is memoryyyyyyyyyyyyyy')
+        #print(memory_, 'is memoryyyyyy')
 
         state = copy.deepcopy(self.init_episode())
         self.stats.on_episode_begin(self.episode_count)
@@ -193,7 +193,7 @@ class BaseEnvironment:
         #old_state = copy.deepcopy(state)
         action_index, value, policy = mcts(state, self.agent.Network_model, get_temperature(self.step_count),confignew)
 
-        #print(f' {action_index} is action and {self.step_count} is step count')
+        print(f' {action_index} is action choosen by mcts and {self.step_count} is step count')
 
         next_state = self.physics.step(GridActions(action_index))
         reward = self.rewards.calculate_reward(state_, GridActions(action_index), next_state)
@@ -223,8 +223,8 @@ class BaseEnvironment:
         while not state_.is_terminal():
             if type(state_) == CPPState:
                 state = self.agent.Network_model.transfrom_state(state_, for_prediction=True)
-
-            action_index, value, policy = mcts(state, self.agent.Network_model, get_temperature(self.step_count), confignew)
+            action_index, value, policy = mcts(state, self.agent.Network_model, None, confignew)
+            print(f'{action_index} is greedy action taken by mcts during test at step {self.step_count}')
             next_state = self.physics.step(GridActions(action_index))
             reward = self.rewards.calculate_reward(state_, GridActions(action_index), next_state)
             self.stats.add_experience((copy.deepcopy(state_), action_index, reward, copy.deepcopy(next_state)))
